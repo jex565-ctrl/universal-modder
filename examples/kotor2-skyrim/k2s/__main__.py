@@ -9,6 +9,7 @@ Steps (each reads what the previous wrote in --out, a private folder outside any
   voice       characters.json -> voice/wav/<voice type>/*.wav (44.1 kHz mono) + encode_voice.bat
   maps        modules -> maps/<module>/<area>/layout.json, rooms/*.obj, walkmesh/*.obj
   models      item models -> models/*.obj (+ blade OBJs for lightsabers), textures/*.dds
+  meshes      weapon models -> mod/meshes/kotor2/*.nif + mod/textures/kotor2/*.dds (no Blender needed)
   inspect     list the records of any Skyrim plugin (check what was built)
 
 Run with: uv run --with pykotor==2.3.12 python -m k2s <step> ...   (from examples/kotor2-skyrim)
@@ -134,6 +135,17 @@ def cmd_models(a):
         export_texture(k, t, a.out / "models" / "textures")
 
 
+def cmd_meshes(a):
+    from .meshes import build, install_mod
+    res = build(_install(a), _load(a.out, "arsenal.json"), a.skyrim_data, a.out,
+                only=set(a.only.lower().split(",")) if a.only else None)
+    print(json.dumps({k: v for k, v in res.items() if k != "skipped"} | {"skipped": len(res["skipped"])}, indent=1))
+    if a.install:
+        files = install_mod(a.out, a.skyrim_data)
+        (a.out / "installed_files.txt").write_text("\n".join(files) + "\n")
+        print(f"copied {len(files)} files into {a.skyrim_data} (list: {a.out / 'installed_files.txt'})")
+
+
 def cmd_inspect(a):
     from .esp import read_plugin, read_zstring
     pf = read_plugin(a.plugin)
@@ -177,6 +189,10 @@ def main(argv=None):
     s.add_argument("--no-geometry", action="store_true", help="layout.json only")
     s = step("models", cmd_models, kotor=True)
     s.add_argument("--names", help="comma-separated model resrefs; default every weapon's model")
+    s = step("meshes", cmd_meshes, kotor=True)
+    s.add_argument("--skyrim-data", required=True, help="Skyrim Special Edition's Data folder (vanilla templates)")
+    s.add_argument("--only", help="comma-separated model resrefs (e.g. w_lghtsbr_002)")
+    s.add_argument("--install", action="store_true", help="also copy the mod folder into the Data folder")
     s = sub.add_parser("inspect", help="list a plugin's records")
     s.add_argument("plugin", type=Path)
     s.add_argument("--limit", type=int, default=50)

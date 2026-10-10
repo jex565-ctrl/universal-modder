@@ -15,8 +15,6 @@ from __future__ import annotations
 import math
 from pathlib import Path
 
-from pykotor.resource.formats.mdl import read_mdl
-
 from .kotor import K2Install
 
 
@@ -61,33 +59,38 @@ def _v3(v):
 
 
 def load_mdl(install: K2Install, name: str):
+    """A model's node tree via k2s.mdlraw (see there for why not PyKotor's reader)."""
+    from .mdlraw import RawModel
     mdl = install.get(name, "mdl")
     if mdl is None:
         return None
     mdx = install.get(name, "mdx")
-    return read_mdl(mdl.data(), source_ext=mdx.data() if mdx else None)
+    return RawModel(mdl.data(), mdx.data() if mdx else None)
 
 
 def mesh_parts(model) -> list[dict]:
-    """Every renderable mesh node in model space: name, texture, kind (mesh/blade), verts, normals, uvs, faces."""
+    """Every renderable mesh node in model space: name, texture, kind (mesh/blade), verts, normals, uvs, faces.
+
+    A TSL lightsaber blade is drawn twice: saber nodes (flag 0x800, 176 vertices the engine animates) and
+    plain crossed planes with the crystal's texture (w_lsabre<colour>01). The planes are the static blade;
+    the saber nodes are skipped."""
     parts = []
 
     def walk(node, parent: Transform):
-        o = node.orientation
-        t = parent.child(_v3(node.position), (float(o.x), float(o.y), float(o.z), float(o.w)))
+        t = parent.child(node.position, node.orientation)
         mesh = node.mesh
-        if mesh is not None and node.aabb is None and getattr(mesh, "render", True) and mesh.faces:
-            kind = "blade" if node.saber is not None or "blade" in node.name.lower() else "mesh"
-            uvs = mesh.vertex_uv1 or mesh.vertex_uvs or []
+        if mesh is not None and not node.is_saber and mesh.render and mesh.faces and mesh.verts:
+            tex = mesh.texture.lower()
+            kind = "blade" if tex.startswith("w_lsabre") or "blade" in node.name.lower() else "mesh"
             parts.append({
                 "name": node.name,
                 "kind": kind,
-                "texture": (mesh.texture_1 or "").lower(),
-                "lightmap": (mesh.texture_2 or "").lower() if getattr(mesh, "has_lightmap", False) else "",
-                "verts": [t.apply(_v3(v)) for v in mesh.vertex_positions],
-                "normals": [t.apply_dir(_v3(n)) for n in (mesh.vertex_normals or [])],
-                "uvs": [(float(u.x), float(u.y)) for u in uvs],
-                "faces": [(f.v1, f.v2, f.v3) for f in mesh.faces],
+                "texture": tex if tex and tex != "null" else "",
+                "lightmap": "",
+                "verts": [t.apply(v) for v in mesh.verts],
+                "normals": [t.apply_dir(n) for n in mesh.normals],
+                "uvs": list(mesh.uvs),
+                "faces": mesh.faces,
             })
         for c in node.children:
             walk(c, t)

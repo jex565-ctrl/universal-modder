@@ -50,3 +50,44 @@ On the user's PC:
 2. Run `k2s arsenal`, load the plugin in an MO2 profile on a throwaway save, spawn the footlocker, and
    test one saber and one blaster against a bandit.
 3. Screenshot the result, then start phase 2 (meshes).
+
+## 2026-10-10: session 2 (user's Windows PC, both games installed)
+- **Versions:** Skyrim SE 1.7.104 + SKSE 2.3.1 (Steam, no MO2), KOTOR 2 Steam (Aspyr update). Python 3.12.15
+  venv with PyKotor 2.3.12; all 12 tests pass here.
+- **Real catalog:** 40 lightsabers, 85 crystals, 127 blasters, 76 melee, 93 armour, 25 robes, 1215 creatures,
+  213 force powers, 117 quests, 82 modules, 973 conversations.
+- **Fixed from the real data:**
+  - baseitems row 11 is `Lightsaber_Crystals`: crystals now have their own class (were counted as sabers).
+  - UTI properties with `UpgradeType != 255` only apply when that upgrade slot is filled; they are now kept
+    in `upgrade_properties` and no longer summed into the item's power.
+  - Saber colour is read from the blade texture in the saber's own model (`w_lsabre<code>01`: blue, red,
+    gren, yelo, purp, gold=orange, turq=cyan, dgrn=viridian, silv=silver). All 40 sabers resolve.
+  - Designer tags (`{x01}`) are stripped; `<FullName>` becomes "Exile".
+  - `base_label` is the 2DA label, not the row number.
+- **Arsenal on the real masters:** every template found by EditorID; 233 weapons, 321 armour pieces.
+- **In game:** with `KotOR2_Arsenal.esp` enabled, Skyrim reached the main menu (SKSE DataLoaded fired, so the
+  plugin parsed). `coc RiverwoodSleepingGiantInn` from the main menu then closed the game with no Windows
+  error event. Not yet isolated: plugin vs. coc-from-menu on a fresh, never-configured install.
+- **Driving Skyrim:** its console ignores unicode `type`; send each character as `key <VK>` under
+  `scanmode on`. Console key is VK 0xC0.
+- **Crash cause found:** my hand-written `Skyrim.ini` lacked `sResourceArchiveList` (it normally comes from
+  `Skyrim_Default.ini`), so entering any cell crashed, with or without the plugin. INIs are now copies of
+  `Skyrim_Default.ini` and `High.ini` plus windowed settings.
+- **Arsenal verified in game (phase 1):** in Riverwood and a wilderness cell, the red lightsaber equips and
+  swings in real-time combat; HK-47's rifle fires Power Cells (100 → 97 after three shots). Note: `tgm`
+  also gives infinite ammo, so ammo counts only drop with it off.
+- **Meshes (phase 2), no Blender needed:**
+  - PyKotor 2.3.12 misreads the K2 trimesh header (MDX offsets garbage) on these files, so hilts and
+    blasters had no vertices. `k2s/mdlraw.py` reads geometry directly (layout in its docstring).
+  - Texture packs were added with equal priority, so the low-res `tpc` won; now `tpa` wins (hilt 64 px is
+    the real maximum in TSL).
+  - `k2s/bsa.py` reads SSE BSAs; `k2s/nif.py` reads/writes SSE NIFs (byte-identical round trip on the
+    vanilla steel sword, greatsword, dagger and crossbow) and builds weapons on a vanilla template: root,
+    BSX, `Prn` and collision kept; KOTOR hilt as BSTriShape + lighting shader, blade as BSTriShape +
+    additive BSEffectShaderProperty.
+  - `k2s meshes` built 61 melee meshes and 46 textures; 102 weapon records use them (`arsenal --use-meshes`).
+  - **In game:** the red lightsaber shows KOTOR's hilt and a glowing red blade in first and third person.
+- **Not yet:** blaster meshes (the crossbow template is skinned and animated), collision fitted to sabers
+  (they use the steel sword's), dialogue, characters, maps.
+- **Driving notes:** coc closes the console; `hold` doesn't reach DirectInput but `key X down`/`up` does;
+  menus take relative mouse moves then `mdown`; the window is 1920x1080 logical at 150% scaling.

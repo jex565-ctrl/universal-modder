@@ -13,7 +13,7 @@ from __future__ import annotations
 import re
 from collections import Counter
 
-from .kotor import K2Install, as_int
+from .kotor import K2Install, as_int, clean_text
 
 # KOTOR's equip slot bits (baseitems.2da `equipableslots`), inherited from Aurora/NWN.
 SLOT_HEAD, SLOT_BODY, SLOT_HANDS = 0x1, 0x2, 0x8
@@ -30,6 +30,9 @@ SABER_COLOURS = ["blue", "red", "green", "yellow", "violet", "cyan", "silver", "
 # Template ModelVariation → colour as in KOTOR's own g_w_lghtsbr01..05 (blue, red, green, yellow, violet).
 # Higher numbers are TSL's extra colours; unconfirmed, so the catalog marks them "guess".
 VARIATION_COLOUR = {1: "blue", 2: "red", 3: "green", 4: "yellow", 5: "violet"}
+# The blade's texture in the saber's own model is the real answer (w_lsabre<code>01), read from the install.
+BLADE_TEXTURE_COLOUR = {"blue": "blue", "red": "red", "gren": "green", "yelo": "yellow", "purp": "violet",
+                        "gold": "orange", "turq": "cyan", "dgrn": "viridian", "silv": "silver"}
 
 
 def item_model(it: dict) -> str:
@@ -117,6 +120,8 @@ class Catalog:
         info = {"slots": slots}
         if re.search(r"creature|claw|bite|(?<![a-z])slam|natural", label):
             info["class"] = "creature_weapon"  # monsters' built-in attacks, not loot
+        elif "crystal" in label or "sbrcrstl" in col(base, "itemclass").lower():
+            info["class"] = "crystal"  # TSL crystals: colour and bonuses for the saber they're fitted to
         elif "saber" in label:
             info["class"] = "lightsaber"
             info["kind"] = "double" if "double" in label else "short" if "short" in label else "standard"
@@ -158,9 +163,14 @@ class Catalog:
         base_index = g.get("BaseItem", -1)
         base = self.base_row(base_index)
         info = self.classify(base, base_index)
-        name = g.get("LocalizedName", {}).get("text", "")
-        desc = (g.get("DescIdentified") or g.get("Description") or {}).get("text", "")
-        props = [self.describe_property(p) for p in g.get("PropertiesList", []) or []]
+        name = clean_text(g.get("LocalizedName", {}).get("text", ""))
+        desc = clean_text((g.get("DescIdentified") or g.get("Description") or {}).get("text", ""))
+        # TSL properties with an UpgradeType other than 255 only switch on when that upgrade slot is
+        # filled (crystals, cells, emitters), so they don't count towards the item's own power.
+        all_props = g.get("PropertiesList", []) or []
+        props = [self.describe_property(p) for p in all_props if p.get("UpgradeType", 255) == 255]
+        upgrade_props = [{**self.describe_property(p), "upgrade_type": p["UpgradeType"]}
+                         for p in all_props if p.get("UpgradeType", 255) != 255]
         it = {
             "resref": res.resname,
             "source": f"{res.source}:{res.container}",
@@ -168,7 +178,7 @@ class Catalog:
             "name": name or res.resname,
             "description": desc,
             "base_item": base_index,
-            "base_label": col(base, "_label", "label"),
+            "base_label": col(base, "label", "_label"),
             "base_name": self.strref_text(col(base, "name")),
             **info,
             "dice": [as_int(col(base, "numdice"), 0), as_int(col(base, "dietoroll"), 0)],
@@ -183,6 +193,7 @@ class Catalog:
             "upgrade_level": g.get("UpgradeLevel", 0),
             "plot": bool(g.get("Plot", 0)),
             "properties": props,
+            "upgrade_properties": upgrade_props,
             "damage_bonus_avg": round(sum(p.get("damage_avg", 0) for p in props), 2),
             "ac_bonus": round(sum(p.get("ac", 0) for p in props), 2),
             "attack_bonus": round(sum(p.get("attack", 0) for p in props), 2),
@@ -198,15 +209,38 @@ class Catalog:
         for c in SABER_COLOURS:
             if re.search(rf"\b{c}\b", text):
                 return c, "name"
-        for p in it["properties"]:
+        for p in it["properties"] + it["upgrade_properties"]:
             for c in SABER_COLOURS:
                 if c in p["text"].lower():
                     return c, "property"
+        tex = self.blade_texture(item_model(it))
+        if tex:
+            return BLADE_TEXTURE_COLOUR.get(tex, tex), "model"
         m = re.search(r"lghtsbr(\d+)", it["resref"])
         var = int(m.group(1)) if m else it["model_variation"]
         if var in VARIATION_COLOUR:
             return VARIATION_COLOUR[var], "variation"
         return "blue", "guess"
+
+    def blade_texture(self, model: str) -> str:
+        """The colour code in a saber model's blade texture (w_lsabreblue01 -> 'blue'), or ''."""
+        if not hasattr(self, "_blades"):
+            self._blades = {}
+        if model not in self._blades:
+            self._blades[model] = ""
+            r, x = self.k.get(model, "mdl"), self.k.get(model, "mdx")
+            if r:
+                try:
+                    from .mdlraw import RawModel
+                    mdl = RawModel(r.data(), x.data() if x else None)
+                    for nd in mdl.root.walk():
+                        m = re.match(r"w_lsabre([a-z]+?)\d*$", ((nd.mesh and nd.mesh.texture) or "").lower())
+                        if m:
+                            self._blades[model] = m.group(1)
+                            break
+                except Exception:  # noqa: BLE001 - a bad model falls back to the name/variation rules
+                    self.diag[f"saber model unreadable: {model}"] += 1
+        return self._blades[model]
 
     def items(self) -> list[dict]:
         return [self.item(r) for r in self.k.all("uti")]

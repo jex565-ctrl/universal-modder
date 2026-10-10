@@ -55,7 +55,9 @@ class K2Install:
             for f in self.inst.module_resources(mod):
                 res = self._add(f, "module", mod)
                 self.by_module.setdefault(mod.lower(), []).append(res)
-        for pack in self.inst.texturepacks_list():
+        # swpc_tex_tpa (high), tpb (medium) and tpc (low) hold the same names at three sizes; equal priority
+        # means the last one added wins, so add them low to high.
+        for pack in sorted(self.inst.texturepacks_list(), key=lambda n: str(n).lower(), reverse=True):
             for f in self.inst.texturepack_resources(pack):
                 self._add(f, "texturepack", pack)
         for f in self.inst.override_resources():
@@ -169,6 +171,14 @@ def _value(v, install):
 
 def gff_dict(data: bytes, install: K2Install | None = None) -> dict:
     return struct_dict(read_gff(data).root, install)
+
+
+def clean_text(text: str, player: str = "Exile") -> str:
+    """Game text as a player should see it: designer tags like {x01} dropped, <FullName> (the player's name,
+    which Skyrim item and topic text can't insert) replaced by the Exile's title."""
+    import re
+    text = re.sub(r"\{[^}]*\}", "", text or "")
+    return re.sub(r"<FullName>", player, text, flags=re.I).strip()
 
 
 def as_int(text, default: int = 0) -> int:
