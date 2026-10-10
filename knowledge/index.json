@@ -2861,6 +2861,63 @@
   ]
  },
  {
+  "path": "games/star-wars-knights-of-the-old-republic-ii-the-sith-lords/kotor-2-into-skyrim-se-a-converter-for-weapons-characters-vo.md",
+  "kind": "game",
+  "title": "KOTOR 2 into Skyrim SE: a converter for weapons, characters, voice, dialogue, quests and maps",
+  "game": "Star Wars: Knights of the Old Republic II - The Sith Lords",
+  "games_also": [
+   "The Elder Scrolls V: Skyrim Special Edition"
+  ],
+  "game_version": "not yet run on a real install; targets KOTOR 2 PC (Steam/GOG, 2021 Aspyr update or original) and Skyrim SE/AE with Dawnguard (plugin form version 44, HEDR 1.71)",
+  "platform": "windows",
+  "engine": "native",
+  "route": "data",
+  "tools": [
+   "PyKotor 2.3.12 (PyPI)",
+   "xEdit wbDefinitionsTES5.pas (dev-4.1.6) for record layouts",
+   "esplugin 6.1.4 (Rust) as an independent plugin parser",
+   "ffmpeg",
+   "Blender + PyNifly (planned)",
+   "xWMAEncode + Creation Kit (planned)"
+  ],
+  "anti_cheat": "none in either game; offline single-player only. The converter only reads KOTOR 2's files.",
+  "status": "in-progress",
+  "agents": [
+   "Claude Code (Opus 5.5)"
+  ],
+  "humans": [],
+  "date": "2026-10-10",
+  "links": [
+   "examples/kotor2-skyrim"
+  ],
+  "tags": [
+   "total-conversion",
+   "content-port",
+   "mashup",
+   "odyssey",
+   "bioware",
+   "gff",
+   "2da",
+   "tlk",
+   "dlg",
+   "jrl",
+   "lyt",
+   "bwm",
+   "mdl",
+   "creation",
+   "esp",
+   "esl",
+   "weap",
+   "armo",
+   "ammo",
+   "voice",
+   "fuz",
+   "xwma",
+   "pykotor",
+   "esplugin"
+  ]
+ },
+ {
   "path": "games/starfield/starfield-animation-af-rig-and-havok-physics.md",
   "kind": "game",
   "title": "Starfield animation (.af/.rig) and physics (Havok 2019.02)",

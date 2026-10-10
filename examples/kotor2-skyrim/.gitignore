@@ -1,0 +1,8 @@
+# converter output holds game data: keep it outside the repo
+out/
+k2s-out/
+*.esp
+*.esm
+*.esl
+*.fuz
+*.xwm
