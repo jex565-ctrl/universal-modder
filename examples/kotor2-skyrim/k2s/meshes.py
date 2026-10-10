@@ -86,7 +86,7 @@ def build(install: K2Install, arsenal: dict, skyrim_data: str | Path, out: Path,
             missing.append(t)
     summary = {"meshes": len(done), "skipped": skipped, "textures": len(textures), "textures_missing": missing,
                "folder": str(mod)}
-    (out / "meshes.json").write_text(json.dumps({**summary, "converted": done}, indent=1))
+    (out / "meshes.json").write_text(json.dumps({**summary, "converted": done}, indent=1), encoding="utf-8")
     return summary
 
 

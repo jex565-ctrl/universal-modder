@@ -37,6 +37,9 @@ LIGHTING_FLAGS2 = 0x00008001
 EFFECT_FLAGS1 = 0x80400000
 EFFECT_FLAGS2 = 0x00000010
 ALPHA_ADDITIVE = 0x0001  # blending on, src ONE, dst ONE
+ALPHA_BLEND = 0x00ED     # blending on, src SRC_ALPHA, dst INV_SRC_ALPHA
+ALPHA_TEST = 0x1200      # alpha test on, GREATER than the threshold
+ALPHA_MODES = {"additive": (ALPHA_ADDITIVE, 0), "blend": (ALPHA_BLEND, 0), "test": (ALPHA_TEST, 128)}
 
 
 @dataclass
@@ -270,3 +273,95 @@ def flat_normal_dds(size: int = 4, specular: int = 40) -> bytes:
     caps = struct.pack("<IIIII", 0x1000, 0, 0, 0, 0)
     pixel = bytes([255, 128, 128, specular])  # B, G, R, A
     return hdr + pf + caps + pixel * (size * size)
+
+
+# ------------------------------------------------------------------ statics (rooms) with Havok collision
+HAVOK_SCALE = 69.99124  # Skyrim units per Havok unit
+STATIC_MATERIAL = 0xDF02F237  # the stone material vanilla's ms11unholyaltar.nif collision uses
+CHUNK = 200  # convex shapes per bhkListShape; larger rooms get more collision nodes
+
+
+def _node(name: int, children: list[int], extra: list[int] = (), collision: int = -1, flags: int = 0x0E) -> bytes:
+    return (struct.pack(f"<iI{len(extra)}i", name, len(extra), *extra) + struct.pack("<iI3f9ffi", -1, flags, 0, 0, 0,
+            1, 0, 0, 0, 1, 0, 0, 0, 1, 1.0, collision) + struct.pack(f"<I{len(children)}iI", len(children), *children, 0))
+
+
+def _plane(a, b, c, inside):
+    """Plane through a, b, c as (nx, ny, nz, d) with n·p + d <= 0 on the side of `inside`."""
+    u = [b[k] - a[k] for k in range(3)]
+    v = [c[k] - a[k] for k in range(3)]
+    n = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]]
+    m = math.sqrt(sum(x * x for x in n))
+    if m < 1e-12:
+        return None
+    n = [x / m for x in n]
+    d = -sum(n[k] * a[k] for k in range(3))
+    if sum(n[k] * inside[k] for k in range(3)) + d > 0:
+        n, d = [-x for x in n], -d
+    return (*n, d)
+
+
+def prism(top: list, depth_vec) -> tuple[list, list]:
+    """A convex prism from a convex polygon `top` (3 or 4 points, Havok units) swept by `depth_vec`:
+    its vertices and its outward planes."""
+    bottom = [tuple(p[k] + depth_vec[k] for k in range(3)) for p in top]
+    verts = list(top) + bottom
+    centre = [sum(v[k] for v in verts) / len(verts) for k in range(3)]
+    planes = [_plane(top[0], top[1], top[2], centre), _plane(bottom[0], bottom[1], bottom[2], centre)]
+    n = len(top)
+    for i in range(n):
+        planes.append(_plane(top[i], top[(i + 1) % n], bottom[i], centre))
+    return verts, [p for p in planes if p]
+
+
+def convex_shape(verts, planes, radius: float = 0.01) -> bytes:
+    out = struct.pack("<If", STATIC_MATERIAL, radius) + struct.pack("<3I", 0, 0, 0x80000000) * 2
+    out += struct.pack("<I", len(verts)) + b"".join(struct.pack("<4f", *v, 0.0) for v in verts)
+    out += struct.pack("<I", len(planes)) + b"".join(struct.pack("<4f", *p) for p in planes)
+    return out
+
+
+def list_shape(children: list[int]) -> bytes:
+    return (struct.pack(f"<I{len(children)}i", len(children), *children) + struct.pack("<I", STATIC_MATERIAL)
+            + struct.pack("<3I", 0, 0, 0x80000000) * 2 + struct.pack(f"<I{len(children)}I", len(children),
+                                                                      *([0] * len(children))))
+
+
+def static(parts: list[dict], textures: dict[str, str], normal_map: str, convexes: list[tuple[list, list]],
+           rigid_body_template: bytes) -> bytes:
+    """A static NIF: render `parts` (Skyrim units) and collide with `convexes` (Havok units).
+
+    `rigid_body_template` is a vanilla static bhkRigidBody (layer STATIC, fixed motion); only its shape
+    reference (the first 4 bytes) is changed."""
+    nif = Nif([b"kotor2skyrim", b"", b""], [], [], [0])
+    blocks: list[tuple[str, bytes]] = [("BSFadeNode", b""), ("BSXFlags", struct.pack("<iI", nif.string_index("BSX"), 0x82))]
+    children = []
+    for c0 in range(0, len(convexes), CHUNK):
+        chunk = convexes[c0:c0 + CHUNK]
+        node = len(blocks)
+        blocks.append(("NiNode", b""))
+        first = len(blocks)
+        for verts, planes in chunk:
+            blocks.append(("bhkConvexVerticesShape", convex_shape(verts, planes)))
+        lst = len(blocks)
+        blocks.append(("bhkListShape", list_shape(list(range(first, lst)))))
+        body = len(blocks)
+        blocks.append(("bhkRigidBody", struct.pack("<i", lst) + rigid_body_template[4:]))
+        col = len(blocks)
+        blocks.append(("bhkCollisionObject", struct.pack("<iHi", node, 0x81, body)))
+        blocks[node] = ("NiNode", _node(nif.string_index(f"Collision{c0 // CHUNK}"), [], collision=col))
+        children.append(node)
+    for p in parts:
+        base = len(blocks)
+        name = nif.string_index(p["name"] or f"part{base}")
+        mode = ALPHA_MODES.get(p.get("alpha") or "")
+        blocks.append(("BSTriShape", tri_shape(name, p["verts"], p["uvs"], p["normals"], p["faces"], base + 1,
+                                               base + 3 if mode else -1)))
+        blocks.append(("BSLightingShaderProperty", lighting_shader(base + 2)))
+        blocks.append(("BSShaderTextureSet", texture_set(textures.get(p["texture"], ""), normal_map)))
+        if mode:
+            blocks.append(("NiAlphaProperty", alpha_property(*mode)))
+        children.append(base)
+    blocks[0] = ("BSFadeNode", _node(nif.string_index("Room"), children, extra=[1]))
+    nif.blocks = blocks
+    return write(nif)

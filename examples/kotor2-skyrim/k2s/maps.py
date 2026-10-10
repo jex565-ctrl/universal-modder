@@ -124,7 +124,7 @@ def export_area(install: K2Install, module: str, area: str, out_dir: Path, geome
             if wok is not None:
                 result.setdefault("walkmeshes", []).append(
                     export_walkmesh(wok.data(), out_dir / "walkmesh" / f"{room['model']}.obj"))
-    (out_dir / "layout.json").write_text(json.dumps(result, indent=1))
+    (out_dir / "layout.json").write_text(json.dumps(result, indent=1), encoding="utf-8")
     return result
 
 
@@ -139,5 +139,5 @@ def export_walkmesh(data: bytes, path: Path) -> str:
             lines.append(f"v {float(v.x):.5f} {float(v.y):.5f} {float(v.z):.5f}")
         lines.append(f"f {n + 1} {n + 2} {n + 3}")
         n += 3
-    path.write_text("\n".join(lines) + "\n")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return str(path)

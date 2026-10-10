@@ -68,7 +68,7 @@ def load_mdl(install: K2Install, name: str):
     return RawModel(mdl.data(), mdx.data() if mdx else None)
 
 
-def mesh_parts(model) -> list[dict]:
+def mesh_parts(model, skinless: bool = False) -> list[dict]:
     """Every renderable mesh node in model space: name, texture, kind (mesh/blade), verts, normals, uvs, faces.
 
     A TSL lightsaber blade is drawn twice: saber nodes (flag 0x800, 176 vertices the engine animates) and
@@ -79,7 +79,8 @@ def mesh_parts(model) -> list[dict]:
     def walk(node, parent: Transform):
         t = parent.child(node.position, node.orientation)
         mesh = node.mesh
-        if mesh is not None and not node.is_saber and mesh.render and mesh.faces and mesh.verts:
+        if mesh is not None and not node.is_saber and not (skinless and node.flags & 0x40) and mesh.render \
+                and mesh.faces and mesh.verts:
             tex = mesh.texture.lower()
             kind = "blade" if tex.startswith("w_lsabre") or "blade" in node.name.lower() else "mesh"
             parts.append({
@@ -140,8 +141,8 @@ def write_obj(parts: list[dict], obj_path: Path, scale: float = 1.0) -> Path | N
             if p["texture"]:
                 mtl.append(f"map_Kd textures/{p['texture']}.dds")
             mtl.append("")
-    obj_path.write_text("\n".join(lines) + "\n")
-    mtl_path.write_text("\n".join(mtl) + "\n")
+    obj_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    mtl_path.write_text("\n".join(mtl) + "\n", encoding="utf-8")
     return obj_path
 
 
@@ -185,3 +186,44 @@ def export_texture(install: K2Install, name: str, out_dir: Path) -> str | None:
             except Exception:  # noqa: BLE001 - try the next format
                 continue
     return None
+
+
+_ALPHA_CACHE: dict[str, str] = {}
+
+
+def texture_alpha(install: K2Install, name: str) -> str:
+    """How KOTOR draws a texture: '' (opaque), 'additive', 'test' (punch-through) or 'blend', from its TXI
+    (`blending 1`/`additive` and `blending 2`/`punchthrough`) or, without one, an alpha channel that isn't
+    an environment-map mask."""
+    if not name:
+        return ""
+    if name in _ALPHA_CACHE:
+        return _ALPHA_CACHE[name]
+    mode = ""
+    r = install.get(name, "tpc")
+    if r is not None:
+        from pykotor.resource.formats.tpc import read_tpc
+        try:
+            tpc = read_tpc(r.data())
+            txi = (getattr(tpc, "txi", "") or "").lower()
+            words = dict(line.split(None, 1) for line in txi.splitlines() if len(line.split(None, 1)) == 2)
+            blend = words.get("blending", "").strip()
+            if blend in ("1", "additive"):
+                mode = "additive"
+            elif blend in ("2", "punchthrough"):
+                mode = "test"
+            elif "envmaptexture" not in words and "bumpyshinytexture" not in words and _has_alpha(tpc):
+                mode = "blend"
+        except Exception:  # noqa: BLE001 - unreadable texture: draw it opaque
+            mode = ""
+    _ALPHA_CACHE[name] = mode
+    return mode
+
+
+def _has_alpha(tpc) -> bool:
+    try:
+        f = tpc.format()
+        fmt = str(getattr(f, "name", f)).upper()
+    except Exception:  # noqa: BLE001
+        return False
+    return "DXT5" in fmt or "RGBA" in fmt or "BGRA" in fmt

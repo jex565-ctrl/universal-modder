@@ -107,11 +107,11 @@ def export(install_path: str | Path, characters: dict, out_dir: str | Path, *, f
         if limit and done >= limit:
             break
     out_dir.mkdir(parents=True, exist_ok=True)
-    (out_dir / "manifest.json").write_text(json.dumps(manifest, indent=1))
+    (out_dir / "manifest.json").write_text(json.dumps(manifest, indent=1), encoding="utf-8")
     bat = ["@echo off", "rem Run on Windows with xWMAEncode.exe (from the Creation Kit) on PATH.",
            "setlocal enabledelayedexpansion"]
     for m in manifest:
         wav = m["wav"].replace("/", "\\")
         bat.append(f'if not exist "{wav[:-4]}.xwm" xWMAEncode.exe -b 48000 "{wav}" "{wav[:-4]}.xwm"')
-    (out_dir / "encode_voice.bat").write_text("\r\n".join(bat) + "\r\n")
+    (out_dir / "encode_voice.bat").write_text("\r\n".join(bat) + "\r\n", encoding="utf-8")
     return {"lines": done, "missing_audio": missing, "indexed_files": len(files), "out": str(out_dir)}

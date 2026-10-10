@@ -70,6 +70,10 @@ class Record:
     subrecords: list[Subrecord] = field(default_factory=list)
     flags: int = 0
     version: int = FORM_VERSION_SSE
+    # CELL: placed references (REFR/ACHR) in its persistent and temporary child groups.
+    # DIAL: its INFO records.
+    persistent: list["Record"] = field(default_factory=list)
+    children: list["Record"] = field(default_factory=list)
 
     def add(self, sig: str, data: bytes) -> "Record":
         self.subrecords.append(Subrecord(sig, data))
@@ -98,6 +102,51 @@ class Record:
 
 def _group(label: bytes, group_type: int, contents: bytes) -> bytes:
     return b"GRUP" + struct.pack("<I", 24 + len(contents)) + label + struct.pack("<iII", group_type, 0, 0) + contents
+
+
+def _interior_cells(cells: list[Record]) -> tuple[bytes, int]:
+    """Interior cells in block (type 2) and sub-block (type 3) groups by the object ID's last two decimal
+    digits, each followed by its children group (type 6) holding persistent (8) and temporary (9) refs."""
+    blocks: dict[int, dict[int, list[Record]]] = {}
+    for c in cells:
+        oid = c.formid & 0xFFFFFF
+        blocks.setdefault(oid % 10, {}).setdefault((oid // 10) % 10, []).append(c)
+    out, n = b"", 0
+    for b in sorted(blocks):
+        sub_out = b""
+        for sb in sorted(blocks[b]):
+            cells_out = b""
+            for c in blocks[b][sb]:
+                cells_out += c.to_bytes()
+                n += 1
+                kids = b""
+                label = struct.pack("<I", c.formid)
+                if c.persistent:
+                    kids += _group(label, 8, b"".join(r.to_bytes() for r in c.persistent))
+                    n += 1 + len(c.persistent)
+                if c.children:
+                    kids += _group(label, 9, b"".join(r.to_bytes() for r in c.children))
+                    n += 1 + len(c.children)
+                if kids:
+                    cells_out += _group(label, 6, kids)
+                    n += 1
+            sub_out += _group(struct.pack("<i", sb), 3, cells_out)
+            n += 1
+        out += _group(struct.pack("<i", b), 2, sub_out)
+        n += 1
+    return out, n
+
+
+def _topics(topics: list[Record]) -> tuple[bytes, int]:
+    """Each DIAL followed by its topic-children group (type 7) of INFOs."""
+    out, n = b"", 0
+    for t in topics:
+        out += t.to_bytes()
+        n += 1
+        if t.children:
+            out += _group(struct.pack("<I", t.formid), 7, b"".join(r.to_bytes() for r in t.children))
+            n += 1 + len(t.children)
+    return out, n
 
 
 class Plugin:
@@ -165,10 +214,16 @@ class Plugin:
             recs = by_type.get(sig)
             if not recs:
                 continue
-            if sig in ("CELL", "WRLD", "DIAL"):
-                raise NotImplementedError(f"{sig} needs child groups; write it with a dedicated builder")
-            groups.append(_group(sig.encode("ascii"), 0, b"".join(r.to_bytes() for r in recs)))
-            count += 1 + len(recs)  # HEDR counts records and groups
+            if sig == "WRLD":
+                raise NotImplementedError("worldspaces are not supported; KOTOR areas become interior cells")
+            if sig == "CELL":
+                body, n = _interior_cells(recs)
+            elif sig == "DIAL":
+                body, n = _topics(recs)
+            else:
+                body, n = b"".join(r.to_bytes() for r in recs), len(recs)
+            groups.append(_group(sig.encode("ascii"), 0, body))
+            count += 1 + n  # HEDR counts records and groups
         return self.header(count) + b"".join(groups)
 
     def write(self, path: str | Path) -> Path:
@@ -261,6 +316,7 @@ def read_plugin(path: str | Path, types: set[str] | None = None) -> PluginFile:
         if gtype == 0 and (types is None or sig in types):
             out: list[Record] = []
             _walk_group(buf, pos + 24, pos + gsize, out)
-            records.setdefault(sig, []).extend(r for r in out if r.sig == sig or types is None)
+            for r in out:  # child records (INFO in DIAL, REFR/ACHR in CELL) are kept under their own type
+                records.setdefault(r.sig, []).append(r)
         pos += gsize
     return PluginFile(p, header.flags, masters, records, num)

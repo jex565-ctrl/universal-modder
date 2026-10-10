@@ -37,14 +37,14 @@ def _load(out: Path, name: str):
     p = out / name
     if not p.exists():
         sys.exit(f"{p} not found; run the step that writes it first")
-    return json.loads(p.read_text())
+    return json.loads(p.read_text(encoding="utf-8"))
 
 
 def cmd_catalog(a):
     from .catalog import Catalog
     cat = Catalog(_install(a)).build()
     a.out.mkdir(parents=True, exist_ok=True)
-    (a.out / "catalog.json").write_text(json.dumps(cat, indent=1))
+    (a.out / "catalog.json").write_text(json.dumps(cat, indent=1), encoding="utf-8")
     print(json.dumps({"summary": cat["summary"], "diagnostics": cat["diagnostics"]}, indent=1))
 
 
@@ -60,7 +60,7 @@ def cmd_arsenal(a):
 def cmd_console(a):
     from .arsenal import console_batch
     text = console_batch(_load(a.out, "arsenal.json"), a.prefix)
-    (a.out / "kotor2.txt").write_text(text)
+    (a.out / "kotor2.txt").write_text(text, encoding="utf-8")
     print(text, end="")
     print(f"# saved as {a.out / 'kotor2.txt'}; copy it next to SkyrimSE.exe and type `bat kotor2` in the console")
 
@@ -73,29 +73,34 @@ def cmd_dialogue(a):
     d = a.out / "dialogue"
     d.mkdir(parents=True, exist_ok=True)
     scripts: Counter = Counter()
-    n = 0
+    n, failed = 0, {}
     for r in k.all("dlg"):
-        conv = conversation(k, r.resname)
-        (d / f"{r.resname}.json").write_text(json.dumps(conv, indent=1))
-        (d / f"{r.resname}.md").write_text(readable(conv))
+        try:
+            conv = conversation(k, r.resname)
+        except Exception as e:  # noqa: BLE001 - a few retail .dlg files are damaged; log them and go on
+            failed[r.resname] = f"{type(e).__name__}: {e}"[:200]
+            continue
+        (d / f"{r.resname}.json").write_text(json.dumps(conv, indent=1), encoding="utf-8")
+        (d / f"{r.resname}.md").write_text(readable(conv), encoding="utf-8")
         scripts.update(scripts_used(conv))
         n += 1
     (a.out / "scripts_to_port.json").write_text(json.dumps(
-        [{"kind": k_, "script": s, "uses": c} for (k_, s), c in scripts.most_common()], indent=1))
+        [{"kind": k_, "script": s, "uses": c} for (k_, s), c in scripts.most_common()], indent=1), encoding="utf-8")
+    (a.out / "dialogue_failed.json").write_text(json.dumps(failed, indent=1), encoding="utf-8")
     cat = _load(a.out, "catalog.json") if (a.out / "catalog.json").exists() else None
     if cat:
-        (a.out / "quests.json").write_text(json.dumps(journal_to_quests(cat["journal"]), indent=1))
-    print(json.dumps({"conversations": n, "scripts_to_port": len(scripts), "quests": len(cat["journal"]) if cat else None}))
+        (a.out / "quests.json").write_text(json.dumps(journal_to_quests(cat["journal"]), indent=1), encoding="utf-8")
+    print(json.dumps({"conversations": n, "failed": len(failed), "scripts_to_port": len(scripts), "quests": len(cat["journal"]) if cat else None}))
 
 
 def cmd_characters(a):
     from .characters import build
     cat = _load(a.out, "catalog.json")
-    convs = {p.stem: json.loads(p.read_text()) for p in sorted((a.out / "dialogue").glob("*.json"))}
+    convs = {p.stem: json.loads(p.read_text(encoding="utf-8")) for p in sorted((a.out / "dialogue").glob("*.json"))}
     if not convs:
         sys.exit("run `dialogue` first")
     res = build(cat, convs)
-    (a.out / "characters.json").write_text(json.dumps(res, indent=1))
+    (a.out / "characters.json").write_text(json.dumps(res, indent=1), encoding="utf-8")
     top = [(c["name"], c["tag"], len(c["lines"]), c["voiced_lines"]) for c in res["characters"] if c["lines"]][:25]
     print(json.dumps({"characters": len(res["characters"]), "unassigned_lines": res["unassigned_lines"],
                       "most_lines": top}, indent=1))
@@ -142,8 +147,71 @@ def cmd_meshes(a):
     print(json.dumps({k: v for k, v in res.items() if k != "skipped"} | {"skipped": len(res["skipped"])}, indent=1))
     if a.install:
         files = install_mod(a.out, a.skyrim_data)
-        (a.out / "installed_files.txt").write_text("\n".join(files) + "\n")
+        (a.out / "installed_files.txt").write_text("\n".join(files) + "\n", encoding="utf-8")
         print(f"copied {len(files)} files into {a.skyrim_data} (list: {a.out / 'installed_files.txt'})")
+
+
+def cmd_area(a):
+    from .area import UNITS, build
+    from .esp import Plugin
+    from .maps import export_area, module_areas
+    from .npc import actor_ref, make_npc
+    from .skyrim import MasterSet
+    k = _install(a)
+    module = a.module.lower()
+    masters = ["Skyrim.esm", "Update.esm", "Dawnguard.esm"]
+    ms = MasterSet(a.skyrim_data, masters, types={"NPC_", "LIGH", "OTFT", "STAT", "ARMO", "WEAP", "VTYP"})
+    plugin = Plugin(f"KotOR2_{module.upper()}.esp", masters, author="kotor2skyrim",
+                    description=f"KOTOR 2 {module.upper()} converted locally from your own install")
+    results = []
+    for area in module_areas(k, module):
+        layout = export_area(k, module, area, a.out / "maps" / module / area, geometry=False)
+        res = build(k, module, area, layout, a.skyrim_data, a.out, plugin, ms, {}, {})
+        cell = next(r for r in plugin.records if r.sig == "CELL" and r.edid == res["cell"])
+        wps = {p.get("tag", "").lower(): p for p in layout["placements"] if p["kind"] == "waypoint"}
+        cast = {"kreia": "wp_kreia_spawn1"}
+        npcs = {}
+        for p in layout["placements"]:
+            if p["kind"] == "creature" and p.get("template", "").lower() == "p_atton":
+                cast["atton"] = p
+        for tag, where in cast.items():
+            spot = wps.get(where) if isinstance(where, str) else where
+            if not spot:
+                continue
+            npc = make_npc(plugin, ms, tag, f"K2_{tag.capitalize()}")
+            npcs[tag] = npc
+            x, y, z = (c * UNITS for c in spot["pos"])
+            cell.persistent.append(actor_ref(plugin, npc.formid, (x, y, z + 5),
+                                             spot.get("skyrim", {}).get("rot_z", 0.0), f"K2_{tag.capitalize()}Ref"))
+            res.setdefault("characters", []).append(tag)
+        # conversations: (dlg, speaker tag, starting entry, topic prefix, quest EditorID)
+        talks = [("101kreia", "kreia", 44, "K2KR", "K2Kreia101")] if module == "101per" else []
+        for dlg, tag, start, prefix, quest in talks:
+            if tag not in npcs:
+                continue
+            from .talk import Converter, export_voice
+            import struct as _s
+            conv = json.loads((a.out / "dialogue" / f"{dlg}.json").read_text(encoding="utf-8"))
+            c = Converter(plugin, conv, npcs[tag].formid, quest, prefix, f"KOTOR 2: {dlg}")
+            info = c.build(start)
+            vt_fid = _s.unpack("<I", npcs[tag].get("VTCK"))[0]
+            vt = next(r.edid for gid, r, pf in ms.records("VTYP") if ms.local_formid(gid, plugin) == vt_fid)
+            folder = a.out / "mod" / "sound" / "voice" / plugin.name.lower() / vt.lower()
+            info["voice"] = export_voice(a.kotor2, c.voice, folder, ffmpeg=a.ffmpeg)
+            info["voice_type"] = vt
+            seq = a.out / "mod" / "seq"
+            seq.mkdir(parents=True, exist_ok=True)
+            (seq / plugin.name.replace(".esp", ".seq")).write_bytes(_s.pack("<I", c.quest.formid & 0xFFFFFF))
+            res.setdefault("dialogue", []).append(info)
+        results.append(res)
+    out = plugin.write(a.out / plugin.name)
+    print(json.dumps({"plugin": str(out), "areas": results}, indent=1, default=str))
+    if a.install:
+        from .meshes import install_mod
+        import shutil
+        files = install_mod(a.out, a.skyrim_data)
+        shutil.copy2(out, Path(a.skyrim_data) / plugin.name)
+        print(f"installed {len(files)} files and {plugin.name}")
 
 
 def cmd_inspect(a):
@@ -193,6 +261,11 @@ def main(argv=None):
     s.add_argument("--skyrim-data", required=True, help="Skyrim Special Edition's Data folder (vanilla templates)")
     s.add_argument("--only", help="comma-separated model resrefs (e.g. w_lghtsbr_002)")
     s.add_argument("--install", action="store_true", help="also copy the mod folder into the Data folder")
+    s = step("area", cmd_area, kotor=True)
+    s.add_argument("--module", required=True, help="e.g. 101per")
+    s.add_argument("--skyrim-data", required=True)
+    s.add_argument("--install", action="store_true", help="copy meshes, textures and the plugin into Data")
+    s.add_argument("--ffmpeg", default="ffmpeg")
     s = sub.add_parser("inspect", help="list a plugin's records")
     s.add_argument("plugin", type=Path)
     s.add_argument("--limit", type=int, default=50)

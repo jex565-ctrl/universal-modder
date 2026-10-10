@@ -271,7 +271,7 @@ def build(catalog: dict, ms: MasterSet, out_dir: str | Path, *, esl: bool = True
         "templates": {k: v[1].edid for k, v in t.cache.items()},
         "items": mapping,
     }
-    (out_dir / "arsenal.json").write_text(json.dumps(summary, indent=1))
+    (out_dir / "arsenal.json").write_text(json.dumps(summary, indent=1), encoding="utf-8")
     return summary
 
 

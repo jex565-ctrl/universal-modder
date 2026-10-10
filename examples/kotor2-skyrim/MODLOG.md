@@ -91,3 +91,16 @@ On the user's PC:
   (they use the steel sword's), dialogue, characters, maps.
 - **Driving notes:** coc closes the console; `hold` doesn't reach DirectInput but `key X down`/`up` does;
   menus take relative mouse moves then `mdown`; the window is 1920x1080 logical at 150% scaling.
+
+## 2026-10-10: session 2b: Peragus 101PER (maps, characters, dialogue)
+- `k2s area --module 101per`: 66 rooms as static NIFs (k2s/nif.static), collision from the walkmesh
+  (floor prisms + 3 m walls on unshared edges, convex shapes in bhkListShape chunks), interior cell
+  K2_101PER, a fill light per room, COC marker at the module entry, TXI blend modes (glass additive,
+  grates alpha-test). Skinned room meshes (dead miners) skipped: they show in bind pose.
+- Kreia and Atton as NPC_ with vanilla traits templates (Idgrod, Brynjolf) for FaceGen. Verified in game:
+  Peragus renders, Kreia stands in the morgue in a hooded robe with a Talk prompt.
+- k2s/talk.py turns 101kreia.dlg into QUST/DIAL/INFO/DLBR + original voice WAVs. Records match vanilla
+  layout, quest is running, GetIsID(Kreia) = 1, but **talking opens no dialogue yet** (also without
+  conditions). Unresolved; next suspects: missing AI packages (PKID dropped), WAV voice, quest fields.
+- Driving: console state desyncs easily; sStartingConsoleCommand did not fire in SSE. Restart per test.
+- The modified KotOR2_101PER.esp in Data is the no-condition experiment; rebuild with `k2s area --install`.
